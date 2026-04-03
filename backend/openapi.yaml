@@ -1,0 +1,1568 @@
+openapi: 3.1.0
+
+info:
+  title: Hotel Reservation & Management System API
+  version: 1.0.0
+  description: |
+    REST API for the HR&MS platform.
+
+    **Authentication:** Bearer token (Laravel Sanctum).
+    Obtain a token via `POST /login` or `POST /register`, then pass it as:
+    ```
+    Authorization: Bearer <token>
+    ```
+
+    **Currency:** All monetary values are in **ETB (Ethiopian Birr)**.
+
+    **Response envelope:**
+    ```json
+    { "success": true, "message": "...", "data": { ... } }
+    ```
+    Errors follow:
+    ```json
+    { "success": false, "message": "...", "errors": { "field": ["msg"] } }
+    ```
+
+  contact:
+    name: HR&MS Support
+    email: support@hrms.com
+
+servers:
+  - url: http://localhost:8000/api
+    description: Local development
+  - url: https://api.hrms.com/api
+    description: Production
+
+tags:
+  - name: Auth
+    description: Registration, login, password management
+  - name: Email Verification
+    description: OTP-based email verification
+  - name: Rooms (Guest)
+    description: Browse and search rooms
+  - name: Bookings (Guest)
+    description: Create and manage own bookings
+  - name: Payments (Guest)
+    description: Initiate and track payments
+  - name: Reviews (Guest)
+    description: Submit and manage reviews
+  - name: Rooms (Admin)
+    description: Full room CRUD
+  - name: Bookings (Admin)
+    description: Manage all bookings
+  - name: Payments (Admin)
+    description: View and manage all payments
+  - name: Analytics
+    description: Dashboard and reporting data
+  - name: Webhooks
+    description: Payment gateway callbacks
+
+
+# =============================================================================
+# REUSABLE COMPONENTS
+# =============================================================================
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  # ── Parameters ──────────────────────────────────────────────────────────────
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      schema: { type: integer, default: 1 }
+    PerPageParam:
+      name: per_page
+      in: query
+      schema: { type: integer, default: 15, maximum: 100 }
+    YearParam:
+      name: year
+      in: query
+      schema: { type: integer, minimum: 2020, maximum: 2100 }
+      example: 2026
+
+  # ── Schemas ──────────────────────────────────────────────────────────────────
+  schemas:
+
+    # ── Envelope ──────────────────────────────────────────────────────────────
+    SuccessEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        message: { type: string }
+        data:    { }
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string }
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items: { type: string }
+
+    Pagination:
+      type: object
+      properties:
+        total:        { type: integer }
+        per_page:     { type: integer }
+        current_page: { type: integer }
+        last_page:    { type: integer }
+
+    # ── User ──────────────────────────────────────────────────────────────────
+    User:
+      type: object
+      properties:
+        id:                { type: integer, example: 1 }
+        name:              { type: string,  example: "Abebe Girma" }
+        email:             { type: string,  format: email }
+        phone:             { type: string,  example: "+251911234567" }
+        role:              { type: string,  enum: [guest, admin] }
+        email_verified_at: { type: string,  format: date-time, nullable: true }
+        created_at:        { type: string,  format: date-time }
+
+    # ── Room ──────────────────────────────────────────────────────────────────
+    Room:
+      type: object
+      properties:
+        id:              { type: integer, example: 3 }
+        room_number:     { type: string,  example: "101" }
+        name:            { type: string,  example: "Deluxe King Suite" }
+        type:            { type: string,  enum: [single, double, suite, deluxe, penthouse] }
+        status:          { type: string,  enum: [available, occupied, maintenance, inactive] }
+        floor:           { type: integer, example: 1 }
+        capacity:        { type: integer, example: 2 }
+        price_per_night: { type: number,  format: float, example: 1500.00 }
+        description:     { type: string,  nullable: true }
+        amenities:
+          type: array
+          items: { type: string }
+          example: ["WiFi", "AC", "TV", "Mini Bar"]
+        images:
+          type: array
+          items: { type: string, format: uri }
+        average_rating:  { type: number, format: float, nullable: true, example: 4.5 }
+
+    RoomWrite:
+      type: object
+      required: [room_number, name, type, floor, capacity, price_per_night]
+      properties:
+        room_number:     { type: string,  example: "101" }
+        name:            { type: string,  example: "Deluxe King Suite" }
+        type:            { type: string,  enum: [single, double, suite, deluxe, penthouse] }
+        status:          { type: string,  enum: [available, occupied, maintenance, inactive] }
+        floor:           { type: integer, minimum: 1 }
+        capacity:        { type: integer, minimum: 1, maximum: 10 }
+        price_per_night: { type: number,  minimum: 0 }
+        description:     { type: string,  nullable: true }
+        amenities:
+          type: array
+          items: { type: string }
+        images:
+          type: array
+          items: { type: string, format: uri }
+
+    # ── Booking ───────────────────────────────────────────────────────────────
+    Booking:
+      type: object
+      properties:
+        id:                  { type: integer }
+        booking_reference:   { type: string,  example: "BK-000042" }
+        status:
+          type: string
+          enum: [pending, confirmed, checked_in, checked_out, cancelled, no_show]
+        payment_status:
+          type: string
+          enum: [unpaid, pending, paid, refunded, failed]
+        check_in_date:       { type: string, format: date }
+        check_out_date:      { type: string, format: date }
+        nights:              { type: integer }
+        guests_count:        { type: integer }
+        special_requests:    { type: string, nullable: true }
+        price_per_night:     { type: number, format: float }
+        total_amount:        { type: number, format: float }
+        discount_amount:     { type: number, format: float }
+        final_amount:        { type: number, format: float }
+        cancellation_reason: { type: string, nullable: true }
+        cancelled_at:        { type: string, format: date-time, nullable: true }
+        created_at:          { type: string, format: date-time }
+        room:
+          $ref: '#/components/schemas/Room'
+        user:
+          $ref: '#/components/schemas/User'
+
+    # ── Payment ───────────────────────────────────────────────────────────────
+    Payment:
+      type: object
+      properties:
+        id:             { type: integer }
+        transaction_id: { type: string }
+        amount:         { type: number, format: float }
+        currency:       { type: string, example: "ETB" }
+        status:         { type: string, enum: [pending, completed, failed, refunded] }
+        gateway:        { type: string, enum: [telebirr, cbe_birr] }
+        method:         { type: string, nullable: true }
+        paid_at:        { type: string, format: date-time, nullable: true }
+        booking:
+          type: object
+          properties:
+            id:        { type: integer }
+            reference: { type: string }
+            room:      { type: string }
+            check_in:  { type: string, format: date }
+            check_out: { type: string, format: date }
+
+    # ── Review ────────────────────────────────────────────────────────────────
+    Review:
+      type: object
+      properties:
+        id:          { type: integer }
+        rating:      { type: integer, minimum: 1, maximum: 5 }
+        title:       { type: string, nullable: true }
+        body:        { type: string }
+        is_approved: { type: boolean }
+        created_at:  { type: string, format: date-time }
+        room:
+          $ref: '#/components/schemas/Room'
+
+  # ── Responses ────────────────────────────────────────────────────────────────
+  responses:
+    Unauthenticated:
+      description: Missing or expired token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            success: false
+            message: "Your session has expired. Please log in again."
+
+    Forbidden:
+      description: Authenticated but not authorised
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            success: false
+            message: "You do not have permission to perform this action."
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            success: false
+            message: "Resource not found."
+
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example:
+            success: false
+            message: "Please fix the highlighted errors and try again."
+            errors:
+              email: ["The email field is required."]
+
+    ServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+security:
+  - bearerAuth: []
+
+
+# =============================================================================
+# PATHS
+# =============================================================================
+paths:
+
+  # ============================================================================
+  # AUTH
+  # ============================================================================
+
+  /register:
+    post:
+      tags: [Auth]
+      summary: Register a new guest account
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, password_confirmation]
+              properties:
+                name:                  { type: string, minLength: 2, maxLength: 100, example: "Abebe Girma" }
+                email:                 { type: string, format: email, example: "abebe@example.com" }
+                phone:                 { type: string, example: "+251911234567" }
+                password:              { type: string, format: password, minLength: 8, example: "Secret123" }
+                password_confirmation: { type: string, example: "Secret123" }
+      responses:
+        '201':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:  { $ref: '#/components/schemas/User' }
+                          token: { type: string }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /login:
+    post:
+      tags: [Auth]
+      summary: Authenticate and receive a Bearer token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user:  { $ref: '#/components/schemas/User' }
+                          token: { type: string }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current token
+      responses:
+        '200':
+          description: Logged out
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /logout-all:
+    post:
+      tags: [Auth]
+      summary: Revoke all tokens for this user (all devices)
+      responses:
+        '200':
+          description: Logged out from all devices
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /me:
+    get:
+      tags: [Auth]
+      summary: Get the authenticated user's profile
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /profile:
+    put:
+      tags: [Auth]
+      summary: Update name, email, or phone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:  { type: string, minLength: 2, maxLength: 100 }
+                email: { type: string, format: email }
+                phone: { type: string }
+      responses:
+        '200':
+          description: Profile updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /profile/password:
+    put:
+      tags: [Auth]
+      summary: Change password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, password, password_confirmation]
+              properties:
+                current_password:      { type: string, format: password }
+                password:              { type: string, format: password, minLength: 8 }
+                password_confirmation: { type: string, format: password }
+      responses:
+        '200':
+          description: Password changed
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /forgot-password:
+    post:
+      tags: [Auth]
+      summary: Send a password reset link to the given email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Reset link sent (always 200 to prevent email enumeration)
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /reset-password:
+    post:
+      tags: [Auth]
+      summary: Reset password using the emailed token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, email, password, password_confirmation]
+              properties:
+                token:                 { type: string }
+                email:                 { type: string, format: email }
+                password:              { type: string, format: password, minLength: 8 }
+                password_confirmation: { type: string, format: password }
+      responses:
+        '200':
+          description: Password reset successfully
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ============================================================================
+  # EMAIL VERIFICATION
+  # ============================================================================
+
+  /email/status:
+    get:
+      tags: [Email Verification]
+      summary: Check if the current user's email is verified
+      responses:
+        '200':
+          description: Verification status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          is_verified: { type: boolean }
+                          verified_at: { type: string, format: date-time, nullable: true }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /email/send-otp:
+    post:
+      tags: [Email Verification]
+      summary: Send or resend the 6-digit OTP to the user's email
+      description: OTP expires after 2 minutes. Rate-limited to prevent abuse.
+      responses:
+        '200':
+          description: OTP sent
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /email/verify:
+    post:
+      tags: [Email Verification]
+      summary: Verify the submitted OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [otp]
+              properties:
+                otp: { type: string, minLength: 6, maxLength: 6, example: "482910" }
+      responses:
+        '200':
+          description: Email verified
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+
+  # ============================================================================
+  # ROOMS — GUEST
+  # ============================================================================
+
+  /guest/rooms:
+    get:
+      tags: [Rooms (Guest)]
+      summary: Browse available rooms with optional filters
+      description: Returns only active rooms. Supports pagination.
+      parameters:
+        - { name: type,      in: query, schema: { type: string, enum: [single, double, suite, deluxe, penthouse] } }
+        - { name: capacity,  in: query, schema: { type: integer, minimum: 1 } }
+        - { name: min_price, in: query, schema: { type: number } }
+        - { name: max_price, in: query, schema: { type: number } }
+        - { name: floor,     in: query, schema: { type: integer } }
+        - { name: amenities, in: query, schema: { type: array, items: { type: string } }, style: form, explode: true }
+        - { name: search,    in: query, schema: { type: string }, description: "Search by room name or number" }
+        - { name: sort_by,   in: query, schema: { type: string, enum: [price_per_night, capacity, floor, name] } }
+        - { name: sort_dir,  in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+        - $ref: '#/components/parameters/PerPageParam'
+        - $ref: '#/components/parameters/PageParam'
+      responses:
+        '200':
+          description: Paginated room list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          rooms:
+                            type: array
+                            items: { $ref: '#/components/schemas/Room' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+
+  /guest/rooms/availability:
+    get:
+      tags: [Rooms (Guest)]
+      summary: Find available rooms for a date range
+      parameters:
+        - { name: check_in,  in: query, required: true,  schema: { type: string, format: date } }
+        - { name: check_out, in: query, required: true,  schema: { type: string, format: date } }
+        - { name: guests,    in: query, schema: { type: integer, minimum: 1 } }
+        - { name: type,      in: query, schema: { type: string, enum: [single, double, suite, deluxe, penthouse] } }
+        - { name: min_price, in: query, schema: { type: number } }
+        - { name: max_price, in: query, schema: { type: number } }
+      responses:
+        '200':
+          description: Available rooms for the requested dates
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          check_in:    { type: string, format: date }
+                          check_out:   { type: string, format: date }
+                          nights:      { type: integer }
+                          rooms_found: { type: integer }
+                          rooms:
+                            type: array
+                            items: { $ref: '#/components/schemas/Room' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /guest/rooms/{id}:
+    get:
+      tags: [Rooms (Guest)]
+      summary: Get a single room with average rating
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Room detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Suc
+
+  /guest/rooms/{id}:
+    get:
+      tags: [Rooms (Guest)]
+      summary: Get a single room with average rating
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Room detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Room' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /guest/rooms/{id}/booked-dates:
+    get:
+      tags: [Rooms (Guest)]
+      summary: Get all booked date ranges for a room (for calendar blocking)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: List of booked date ranges
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            check_in:  { type: string, format: date }
+                            check_out: { type: string, format: date }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+
+  # ============================================================================
+  # BOOKINGS — GUEST
+  # ============================================================================
+
+  /guest/bookings:
+    get:
+      tags: [Bookings (Guest)]
+      summary: List the authenticated guest's bookings
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, confirmed, checked_in, checked_out, cancelled, no_show] } }
+        - $ref: '#/components/parameters/PerPageParam'
+        - $ref: '#/components/parameters/PageParam'
+      responses:
+        '200':
+          description: Paginated booking list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          bookings:
+                            type: array
+                            items: { $ref: '#/components/schemas/Booking' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [Bookings (Guest)]
+      summary: Create a new booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [room_id, check_in_date, check_out_date, guests_count]
+              properties:
+                room_id:          { type: integer }
+                check_in_date:    { type: string, format: date, example: "2026-04-10" }
+                check_out_date:   { type: string, format: date, example: "2026-04-15" }
+                guests_count:     { type: integer, minimum: 1, maximum: 10 }
+                special_requests: { type: string, nullable: true, maxLength: 1000 }
+      responses:
+        '201':
+          description: Booking created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Booking' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /guest/bookings/preview:
+    get:
+      tags: [Bookings (Guest)]
+      summary: Preview price breakdown before confirming a booking
+      parameters:
+        - { name: room_id,        in: query, required: true, schema: { type: integer } }
+        - { name: check_in_date,  in: query, required: true, schema: { type: string, format: date } }
+        - { name: check_out_date, in: query, required: true, schema: { type: string, format: date } }
+        - { name: guests_count,   in: query, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Price breakdown
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          nights:          { type: integer }
+                          price_per_night: { type: number, format: float }
+                          subtotal:        { type: number, format: float }
+                          discount_amount: { type: number, format: float }
+                          total_amount:    { type: number, format: float }
+                          currency:        { type: string, example: "ETB" }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /guest/bookings/{id}:
+    get:
+      tags: [Bookings (Guest)]
+      summary: Get a single booking (must belong to the authenticated user)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Booking detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Booking' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Bookings (Guest)]
+      summary: Cancel a booking
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cancellation_reason]
+              properties:
+                cancellation_reason: { type: string, minLength: 10, maxLength: 500 }
+      responses:
+        '200':
+          description: Booking cancelled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Booking' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /guest/bookings/{id}/checkin-token:
+    get:
+      tags: [Bookings (Guest)]
+      summary: Get a signed QR check-in token for a confirmed booking
+      description: Returns an HMAC-signed token valid for 24 hours. Used to generate the QR pass.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: QR token payload
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          token:      { type: string }
+                          expires_at: { type: string, format: date-time }
+                          booking_reference: { type: string }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ============================================================================
+  # PAYMENTS — GUEST
+  # ============================================================================
+
+  /guest/payments/gateways:
+    get:
+      tags: [Payments (Guest)]
+      summary: List available payment gateways
+      responses:
+        '200':
+          description: Supported gateways
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            key:   { type: string, enum: [telebirr, cbe_birr] }
+                            label: { type: string, example: "Telebirr" }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /guest/payments/initiate:
+    post:
+      tags: [Payments (Guest)]
+      summary: Initiate a payment for a booking
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [booking_id, gateway]
+              properties:
+                booking_id: { type: integer }
+                gateway:    { type: string, enum: [telebirr, cbe_birr] }
+      responses:
+        '200':
+          description: Payment initiated — redirect the user to the returned URL
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          payment_url:    { type: string, format: uri }
+                          transaction_id: { type: string }
+                          expires_at:     { type: string, format: date-time }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /guest/payments/verify/{transactionId}:
+    get:
+      tags: [Payments (Guest)]
+      summary: Poll payment status after returning from the gateway
+      parameters:
+        - { name: transactionId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Payment status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payment' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /guest/payments:
+    get:
+      tags: [Payments (Guest)]
+      summary: List the authenticated guest's payment history
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, completed, failed, refunded] } }
+        - $ref: '#/components/parameters/PerPageParam'
+        - $ref: '#/components/parameters/PageParam'
+      responses:
+        '200':
+          description: Paginated payment list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          payments:
+                            type: array
+                            items: { $ref: '#/components/schemas/Payment' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /guest/payments/{id}/receipt:
+    get:
+      tags: [Payments (Guest)]
+      summary: Get a payment receipt (triggers email re-send)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Receipt data
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payment' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /payments/webhook/{gateway}:
+    post:
+      tags: [Webhooks]
+      summary: Payment gateway webhook callback
+      description: |
+        Called by Telebirr or CBE Birr after a payment completes or fails.
+        Verified by gateway-specific signature. No authentication header required.
+      security: []
+      parameters:
+        - { name: gateway, in: path, required: true, schema: { type: string, enum: [telebirr, cbe_birr] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Gateway-specific payload — structure varies per provider
+      responses:
+        '200':
+          description: Webhook acknowledged
+        '400':
+          description: Invalid signature or malformed payload
+
+  # ============================================================================
+  # REVIEWS — GUEST
+  # ============================================================================
+
+  /guest/reviews:
+    get:
+      tags: [Reviews (Guest)]
+      summary: List the authenticated guest's reviews
+      parameters:
+        - { name: room_id, in: query, schema: { type: integer } }
+        - $ref: '#/components/parameters/PerPageParam'
+        - $ref: '#/components/parameters/PageParam'
+      responses:
+        '200':
+          description: Paginated review list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          reviews:
+                            type: array
+                            items: { $ref: '#/components/schemas/Review' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+    post:
+      tags: [Reviews (Guest)]
+      summary: Submit a review for a completed stay
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [booking_id, rating, body]
+              properties:
+                booking_id: { type: integer }
+                rating:     { type: integer, minimum: 1, maximum: 5 }
+                title:      { type: string, maxLength: 100, nullable: true }
+                body:       { type: string, minLength: 10, maxLength: 2000 }
+      responses:
+        '201':
+          description: Review submitted (pending approval)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Review' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /guest/reviews/{id}:
+    put:
+      tags: [Reviews (Guest)]
+      summary: Update an existing review (only before approval)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                title:  { type: string, maxLength: 100, nullable: true }
+                body:   { type: string, minLength: 10, maxLength: 2000 }
+      responses:
+        '200':
+          description: Review updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Review' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Reviews (Guest)]
+      summary: Delete a review
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Review deleted
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ============================================================================
+  # ROOMS — ADMIN
+  # ============================================================================
+
+  /admin/rooms:
+    get:
+      tags: [Rooms (Admin)]
+      summary: List all rooms (all statuses)
+      parameters:
+        - { name: status,   in: query, schema: { type: string, enum: [available, occupied, maintenance, inactive] } }
+        - { name: type,     in: query, schema: { type: string, enum: [single, double, suite, deluxe, penthouse] } }
+        - { name: search,   in: query, schema: { type: string } }
+        - $ref: '#/components/parameters/PerPageParam'
+        - $ref: '#/components/parameters/PageParam'
+      responses:
+        '200':
+          description: Paginated room list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          rooms:
+                            type: array
+                            items: { $ref: '#/components/schemas/Room' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Rooms (Admin)]
+      summary: Create a new room
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoomWrite' }
+      responses:
+        '201':
+          description: Room created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Room' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/rooms/{id}:
+    get:
+      tags: [Rooms (Admin)]
+      summary: Get a single room
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Room detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Room' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Rooms (Admin)]
+      summary: Update a room
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RoomWrite' }
+      responses:
+        '200':
+          description: Room updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Room' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [Rooms (Admin)]
+      summary: Delete a room (soft-delete if bookings exist)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Room deleted
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ============================================================================
+  # BOOKINGS — ADMIN
+  # ============================================================================
+
+  /admin/bookings:
+    get:
+      tags: [Bookings (Admin)]
+      summary: List all bookings with filters
+      parameters:
+        - { name: status,     in: query, schema: { type: string, enum: [pending, confirmed, checked_in, checked_out, cancelled, no_show] } }
+        - { name: room_id,    in: query, schema: { type: integer } }
+        - { name: user_id,    in: query, schema: { type: integer } }
+        - { name: date_from,  in: query, schema: { type: string, format: date } }
+        - { name: date_to,    in: query, schema: { type: string, format: date } }
+        - { name: search,     in: query, schema: { type: string }, description: "Search by reference, guest name, or email" }
+        - { name: sort_by,    in: query, schema: { type: string, enum: [created_at, check_in_date, check_out_date, total_amount] } }
+        - { name: sort_dir,   in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+        - $ref: '#/components/parameters/PerPageParam'
+        - $ref: '#/components/parameters/PageParam'
+      responses:
+        '200':
+          description: Paginated booking list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          bookings:
+                            type: array
+                            items: { $ref: '#/components/schemas/Booking' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/bookings/{id}:
+    get:
+      tags: [Bookings (Admin)]
+      summary: Get a single booking with full detail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Booking detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Booking' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/bookings/{id}/status:
+    patch:
+      tags: [Bookings (Admin)]
+      summary: Update booking status
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:              { type: string, enum: [confirmed, checked_in, checked_out, cancelled, no_show] }
+                cancellation_reason: { type: string, description: "Required when status is cancelled" }
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Booking' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ============================================================================
+  # PAYMENTS — ADMIN
+  # ============================================================================
+
+  /admin/payments:
+    get:
+      tags: [Payments (Admin)]
+      summary: List all payments
+      parameters:
+        - { name: status,   in: query, schema: { type: string, enum: [pending, completed, failed, refunded] } }
+        - { name: gateway,  in: query, schema: { type: string, enum: [telebirr, cbe_birr] } }
+        - { name: date_from, in: query, schema: { type: string, format: date } }
+        - { name: date_to,   in: query, schema: { type: string, format: date } }
+        - $ref: '#/components/parameters/PerPageParam'
+        - $ref: '#/components/parameters/PageParam'
+      responses:
+        '200':
+          description: Paginated payment list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          payments:
+                            type: array
+                            items: { $ref: '#/components/schemas/Payment' }
+                          pagination: { $ref: '#/components/schemas/Pagination' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/payments/{id}:
+    get:
+      tags: [Payments (Admin)]
+      summary: Get a single payment with booking detail
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Payment detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payment' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /admin/payments/{id}/refund:
+    post:
+      tags: [Payments (Admin)]
+      summary: Initiate a refund for a completed payment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Refund initiated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payment' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /admin/payments/{id}/verify:
+    post:
+      tags: [Payments (Admin)]
+      summary: Manually re-verify a payment status with the gateway
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Payment' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ============================================================================
+  # ANALYTICS — ADMIN
+  # ============================================================================
+
+  /admin/analytics/dashboard:
+    get:
+      tags: [Analytics]
+      summary: Top-level KPI summary for the admin dashboard
+      description: Returns today's stats, monthly totals, and occupancy rate.
+      parameters:
+        - $ref: '#/components/parameters/YearParam'
+      responses:
+        '200':
+          description: Dashboard KPIs
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          total_rooms:          { type: integer }
+                          occupied_rooms:       { type: integer }
+                          occupancy_rate:       { type: number, format: float, description: "Percentage 0–100" }
+                          total_bookings_today: { type: integer }
+                          revenue_today:        { type: number, format: float }
+                          revenue_this_month:   { type: number, format: float }
+                          revenue_this_year:    { type: number, format: float }
+                          pending_bookings:     { type: integer }
+                          pending_payments:     { type: integer }
+                          currency:             { type: string, example: "ETB" }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/analytics/revenue:
+    get:
+      tags: [Analytics]
+      summary: Monthly revenue breakdown for a given year
+      parameters:
+        - $ref: '#/components/parameters/YearParam'
+      responses:
+        '200':
+          description: Monthly revenue series
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          year: { type: integer }
+                          currency: { type: string, example: "ETB" }
+                          months:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                month:   { type: integer, minimum: 1, maximum: 12 }
+                                label:   { type: string, example: "Jan" }
+                                revenue: { type: number, format: float }
+                                bookings: { type: integer }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/analytics/occupancy:
+    get:
+      tags: [Analytics]
+      summary: Monthly occupancy rate per room type
+      parameters:
+        - $ref: '#/components/parameters/YearParam'
+      responses:
+        '200':
+          description: Occupancy data
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            room_type:      { type: string }
+                            occupancy_rate: { type: number, format: float }
+                            total_nights:   { type: integer }
+                            booked_nights:  { type: integer }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/analytics/payments:
+    get:
+      tags: [Analytics]
+      summary: Payment breakdown by gateway and status
+      parameters:
+        - $ref: '#/components/parameters/YearParam'
+      responses:
+        '200':
+          description: Payment analytics
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          by_gateway:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                gateway: { type: string }
+                                total:   { type: number, format: float }
+                                count:   { type: integer }
+                          by_status:
+                            type: array
+                            items:
+                              type: object
+                              properties:
+                                status: { type: string }
+                                total:  { type: number, format: float }
+                                count:  { type: integer }
+                          currency: { type: string, example: "ETB" }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/analytics/rooms:
+    get:
+      tags: [Analytics]
+      summary: Per-room performance — revenue, bookings, and average rating
+      parameters:
+        - $ref: '#/components/parameters/YearParam'
+      responses:
+        '200':
+          description: Room performance data
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            room_id:        { type: integer }
+                            room_number:    { type: string }
+                            room_name:      { type: string }
+                            total_bookings: { type: integer }
+                            total_revenue:  { type: number, format: float }
+                            avg_rating:     { type: number, format: float, nullable: true }
+                            occupancy_rate: { type: number, format: float }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }

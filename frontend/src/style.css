@@ -1,0 +1,84 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Light theme (default) ───────────────────────────────────────── */
+:root,
+[data-theme="light"] {
+  --bg:           #ffffff;
+  --bg-soft:      #f8f9fc;
+  --bg-card:      #ffffff;
+  --bg-input:     #fafafa;
+  --border:       #e5e7eb;
+  --border-soft:  #f0f0f0;
+
+  --text:         #1a202c;
+  --text-soft:    #374151;
+  --text-muted:   #6b7280;
+  --text-faint:   #9ca3af;
+
+  --primary:      #1a1a2e;
+  --accent:       #c9a84c;
+  --accent-light: #f0d080;
+  --indigo:       #4f46e5;
+  --indigo-dark:  #4338ca;
+
+  --navbar-bg:    rgba(26, 26, 46, 0.85);
+  --navbar-bg-scrolled: rgba(26, 26, 46, 0.97);
+  --footer-bg:    #0f0f1a;
+
+  --shadow-sm:    0 2px 10px rgba(0,0,0,0.05);
+  --shadow-md:    0 4px 20px rgba(0,0,0,0.08);
+  --shadow-lg:    0 16px 40px rgba(0,0,0,0.13);
+
+  --sans: 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ── Dark theme ──────────────────────────────────────────────────── */
+[data-theme="dark"] {
+  --bg:           #0f0f1a;
+  --bg-soft:      #1a1a2e;
+  --bg-card:      #1e1e30;
+  --bg-input:     #252538;
+  --border:       #2e2e45;
+  --border-soft:  #252538;
+
+  --text:         #f1f1f5;
+  --text-soft:    #d1d5db;
+  --text-muted:   #9ca3af;
+  --text-faint:   #6b7280;
+
+  --primary:      #1a1a2e;
+  --accent:       #c9a84c;
+  --accent-light: #f0d080;
+  --indigo:       #6366f1;
+  --indigo-dark:  #4f46e5;
+
+  --navbar-bg:    rgba(15, 15, 26, 0.92);
+  --navbar-bg-scrolled: rgba(15, 15, 26, 0.99);
+  --footer-bg:    #07070f;
+
+  --shadow-sm:    0 2px 10px rgba(0,0,0,0.3);
+  --shadow-md:    0 4px 20px rgba(0,0,0,0.4);
+  --shadow-lg:    0 16px 40px rgba(0,0,0,0.5);
+}
+
+/* ── Base ────────────────────────────────────────────────────────── */
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.25s, color 0.25s;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}
+
+a { text-decoration: none; color: inherit; }
+button { font-family: inherit; }
+img { display: block; max-width: 100%; }
