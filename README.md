@@ -15,7 +15,7 @@ A full-stack hotel management platform built with **Laravel 10** (API backend) a
 | Charts | Chart.js 4 |
 | Payments | chapa |
 | Testing | PHPUnit 10 |
-| Web server | Nginx |
+
 | Process mgr | Supervisor |
 
 ---
