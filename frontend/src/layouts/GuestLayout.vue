@@ -95,6 +95,7 @@
       </div>
       <div class="footer__bottom">
         <span>© {{ new Date().getFullYear() }} SATAAB Hotel. All rights reserved.</span>
+        <span>Developed by <a href="https://portfolio-ds2i.vercel.app/" target="_blank" rel="noopener noreferrer" style="color: #c9a84c; text-decoration: none;">Semre Demssie</a></span>
         <div class="footer__bottom-links">
           <router-link to="/terms">Terms of Service</router-link>
           <router-link to="/privacy">Privacy Policy</router-link>
